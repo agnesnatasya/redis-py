@@ -2,6 +2,7 @@ import asyncio
 import random
 import weakref
 from typing import AsyncIterator, Iterable, Mapping, Optional, Sequence, Tuple, Type
+from contextlib import aclosing
 
 from redis.asyncio.client import Redis
 from redis.asyncio.connection import (
@@ -53,12 +54,13 @@ class SentinelManagedConnection(Connection):
         if self.connection_pool.is_master:
             await self.connect_to(await self.connection_pool.get_master_address())
         else:
-            async for slave in self.connection_pool.rotate_slaves():
-                try:
-                    return await self.connect_to(slave)
-                except ConnectionError:
-                    continue
-            raise SlaveNotFoundError  # Never be here
+            async with aclosing(self.connection_pool.rotate_slaves()) as slave_rotator:
+                async for slave in slave_rotator:
+                    try:
+                        return await self.connect_to(slave)
+                    except ConnectionError:
+                        continue
+                raise SlaveNotFoundError  # Never be here
 
     async def connect(self):
         return await self.retry.call_with_retry(
