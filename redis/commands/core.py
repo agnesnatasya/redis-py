@@ -2,6 +2,7 @@
 
 import datetime
 import hashlib
+import uuid
 import warnings
 from typing import (
     TYPE_CHECKING,
@@ -79,7 +80,7 @@ class ACLCommands(CommandsProtocol):
 
     def acl_deluser(self, *username: str, **kwargs) -> ResponseT:
         """
-        Delete the ACL for the specified ``username``s
+        Delete the ACL for the specified ``username``\\s
 
         For more information see https://redis.io/commands/acl-deluser
         """
@@ -227,9 +228,10 @@ class ACLCommands(CommandsProtocol):
                       must be prefixed with either a '+' to add the command permission
                       or a '-' to remove the command permission.
             keys: A list of key patterns to grant the user access to. Key patterns allow
-                  '*' to support wildcard matching. For example, '*' grants access to
-                  all keys while 'cache:*' grants access to all keys that are prefixed
-                  with 'cache:'. `keys` should not be prefixed with a '~'.
+                  ``'*'`` to support wildcard matching. For example, ``'*'`` grants
+                  access to all keys while ``'cache:*'`` grants access to all keys that
+                  are prefixed with ``cache:``.
+                  `keys` should not be prefixed with a ``'~'``.
             reset: Indicates whether the user should be fully reset prior to applying
                    the new ACL. Setting this to `True` will remove all existing
                    passwords, flags, and privileges from the user and then apply the
@@ -1378,9 +1380,6 @@ class ManagementCommands(CommandsProtocol):
         raise NotImplementedError(
             "FAILOVER is intentionally not implemented in the client."
         )
-
-
-AsyncManagementCommands = ManagementCommands
 
 
 class AsyncManagementCommands(ManagementCommands):
@@ -3040,9 +3039,15 @@ class ScanCommands(CommandsProtocol):
             Additionally, Redis modules can expose other types as well.
         """
         cursor = "0"
+        iter_req_id = uuid.uuid4()
         while cursor != 0:
             cursor, data = self.scan(
-                cursor=cursor, match=match, count=count, _type=_type, **kwargs
+                cursor=cursor,
+                match=match,
+                count=count,
+                _type=_type,
+                iter_req_id=iter_req_id,
+                **kwargs,
             )
             yield from data
 
@@ -3052,6 +3057,7 @@ class ScanCommands(CommandsProtocol):
         cursor: int = 0,
         match: Union[PatternT, None] = None,
         count: Union[int, None] = None,
+        **kwargs,
     ) -> ResponseT:
         """
         Incrementally return lists of elements in a set. Also return a cursor
@@ -3068,7 +3074,7 @@ class ScanCommands(CommandsProtocol):
             pieces.extend([b"MATCH", match])
         if count is not None:
             pieces.extend([b"COUNT", count])
-        return self.execute_command("SSCAN", *pieces)
+        return self.execute_command("SSCAN", *pieces, **kwargs)
 
     def sscan_iter(
         self,
@@ -3085,8 +3091,11 @@ class ScanCommands(CommandsProtocol):
         ``count`` allows for hint the minimum number of returns
         """
         cursor = "0"
+        iter_req_id = uuid.uuid4()
         while cursor != 0:
-            cursor, data = self.sscan(name, cursor=cursor, match=match, count=count)
+            cursor, data = self.sscan(
+                name, cursor=cursor, match=match, count=count, iter_req_id=iter_req_id
+            )
             yield from data
 
     def hscan(
@@ -3096,6 +3105,7 @@ class ScanCommands(CommandsProtocol):
         match: Union[PatternT, None] = None,
         count: Union[int, None] = None,
         no_values: Union[bool, None] = None,
+        **kwargs,
     ) -> ResponseT:
         """
         Incrementally return key/value slices in a hash. Also return a cursor
@@ -3116,7 +3126,7 @@ class ScanCommands(CommandsProtocol):
             pieces.extend([b"COUNT", count])
         if no_values is not None:
             pieces.extend([b"NOVALUES"])
-        return self.execute_command("HSCAN", *pieces, no_values=no_values)
+        return self.execute_command("HSCAN", *pieces, no_values=no_values, **kwargs)
 
     def hscan_iter(
         self,
@@ -3136,9 +3146,15 @@ class ScanCommands(CommandsProtocol):
         ``no_values`` indicates to return only the keys, without values
         """
         cursor = "0"
+        iter_req_id = uuid.uuid4()
         while cursor != 0:
             cursor, data = self.hscan(
-                name, cursor=cursor, match=match, count=count, no_values=no_values
+                name,
+                cursor=cursor,
+                match=match,
+                count=count,
+                no_values=no_values,
+                iter_req_id=iter_req_id,
             )
             if no_values:
                 yield from data
@@ -3152,6 +3168,7 @@ class ScanCommands(CommandsProtocol):
         match: Union[PatternT, None] = None,
         count: Union[int, None] = None,
         score_cast_func: Union[type, Callable] = float,
+        **kwargs,
     ) -> ResponseT:
         """
         Incrementally return lists of elements in a sorted set. Also return a
@@ -3171,7 +3188,7 @@ class ScanCommands(CommandsProtocol):
         if count is not None:
             pieces.extend([b"COUNT", count])
         options = {"score_cast_func": score_cast_func}
-        return self.execute_command("ZSCAN", *pieces, **options)
+        return self.execute_command("ZSCAN", *pieces, **options, **kwargs)
 
     def zscan_iter(
         self,
@@ -3191,6 +3208,7 @@ class ScanCommands(CommandsProtocol):
         ``score_cast_func`` a callable used to cast the score return value
         """
         cursor = "0"
+        iter_req_id = uuid.uuid4()
         while cursor != 0:
             cursor, data = self.zscan(
                 name,
@@ -3198,6 +3216,7 @@ class ScanCommands(CommandsProtocol):
                 match=match,
                 count=count,
                 score_cast_func=score_cast_func,
+                iter_req_id=iter_req_id,
             )
             yield from data
 
@@ -3224,10 +3243,19 @@ class AsyncScanCommands(ScanCommands):
             HASH, LIST, SET, STREAM, STRING, ZSET
             Additionally, Redis modules can expose other types as well.
         """
+        #  DO NOT inline this statement to the scan call
+        #  Each iter command should have an ID to maintain
+        #  connection to the same replica
+        iter_req_id = uuid.uuid4()
         cursor = "0"
         while cursor != 0:
             cursor, data = await self.scan(
-                cursor=cursor, match=match, count=count, _type=_type, **kwargs
+                cursor=cursor,
+                match=match,
+                count=count,
+                _type=_type,
+                iter_req_id=iter_req_id,
+                **kwargs,
             )
             for d in data:
                 yield d
@@ -3246,10 +3274,14 @@ class AsyncScanCommands(ScanCommands):
 
         ``count`` allows for hint the minimum number of returns
         """
+        #  DO NOT inline this statement to the scan call
+        #  Each iter command should have an ID to maintain
+        #  connection to the same replica
+        iter_req_id = uuid.uuid4()
         cursor = "0"
         while cursor != 0:
             cursor, data = await self.sscan(
-                name, cursor=cursor, match=match, count=count
+                name, cursor=cursor, match=match, count=count, iter_req_id=iter_req_id
             )
             for d in data:
                 yield d
@@ -3271,10 +3303,19 @@ class AsyncScanCommands(ScanCommands):
 
         ``no_values`` indicates to return only the keys, without values
         """
+        #  DO NOT inline this statement to the scan call
+        #  Each iter command should have an ID to maintain
+        #  connection to the same replica
+        iter_req_id = uuid.uuid4()
         cursor = "0"
         while cursor != 0:
             cursor, data = await self.hscan(
-                name, cursor=cursor, match=match, count=count, no_values=no_values
+                name,
+                cursor=cursor,
+                match=match,
+                count=count,
+                no_values=no_values,
+                iter_req_id=iter_req_id,
             )
             if no_values:
                 for it in data:
@@ -3300,6 +3341,10 @@ class AsyncScanCommands(ScanCommands):
 
         ``score_cast_func`` a callable used to cast the score return value
         """
+        #  DO NOT inline this statement to the scan call
+        #  Each iter command should have an ID to maintain
+        #  connection to the same replica
+        iter_req_id = uuid.uuid4()
         cursor = "0"
         while cursor != 0:
             cursor, data = await self.zscan(
@@ -3308,6 +3353,7 @@ class AsyncScanCommands(ScanCommands):
                 match=match,
                 count=count,
                 score_cast_func=score_cast_func,
+                iter_req_id=iter_req_id,
             )
             for d in data:
                 yield d
@@ -3369,7 +3415,7 @@ class SetCommands(CommandsProtocol):
         self, numkeys: int, keys: List[str], limit: int = 0
     ) -> Union[Awaitable[int], int]:
         """
-        Return the cardinality of the intersect of multiple sets specified by ``keys`.
+        Return the cardinality of the intersect of multiple sets specified by ``keys``.
 
         When LIMIT provided (defaults to 0 and means unlimited), if the intersection
         cardinality reaches limit partway through the computation, the algorithm will
@@ -3501,9 +3547,11 @@ class StreamCommands(CommandsProtocol):
     def xack(self, name: KeyT, groupname: GroupT, *ids: StreamIdT) -> ResponseT:
         """
         Acknowledges the successful processing of one or more messages.
-        name: name of the stream.
-        groupname: name of the consumer group.
-        *ids: message ids to acknowledge.
+
+        Args:
+            name: name of the stream.
+            groupname: name of the consumer group.
+            *ids: message ids to acknowledge.
 
         For more information see https://redis.io/commands/xack
         """
@@ -3699,8 +3747,10 @@ class StreamCommands(CommandsProtocol):
     def xdel(self, name: KeyT, *ids: StreamIdT) -> ResponseT:
         """
         Deletes one or more messages from a stream.
-        name: name of the stream.
-        *ids: message ids to delete.
+
+        Args:
+            name: name of the stream.
+            *ids: message ids to delete.
 
         For more information see https://redis.io/commands/xdel
         """
@@ -4268,7 +4318,7 @@ class SortedSetCommands(CommandsProtocol):
     ) -> Union[Awaitable[int], int]:
         """
         Return the cardinality of the intersect of multiple sorted sets
-        specified by ``keys`.
+        specified by ``keys``.
         When LIMIT provided (defaults to 0 and means unlimited), if the intersection
         cardinality reaches limit partway through the computation, the algorithm will
         exit and yield limit as the cardinality
